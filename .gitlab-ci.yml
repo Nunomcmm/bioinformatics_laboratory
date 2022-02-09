@@ -1,0 +1,67 @@
+
+ # Get docker image
+image: nunomcmm/docker_lb  
+
+ # List of stages for jobs, and their order of execution
+stages:         
+  - test
+  - deploy
+
+# This job runs in the test stage
+unit_test_job:   
+  stage: test   
+  
+  # Install pytest and pylint
+  before_script:    
+  - pip3 install pytest
+  - pip3 install pylint 
+  - pip3 install coverage
+  
+  # Run pytest
+  script:
+     - python3 -m pytest -vvv tests/test.py
+     - coverage run -m pytest tests/test.py
+     - coverage report 
+     - coverage xml 
+  coverage: '/TOTAL.*\s+(\d+\%)/'
+
+# This job also runs in the test stage
+lint_test_job:   
+  before_script:
+    - mkdir -p public/badges public/lint
+    - echo undefined > public/badges/$CI_JOB_NAME.score
+    - pip install pylint-gitlab
+  script:
+    - pylint --exit-zero --output-format=text $(find -type f -name "*.py" ! -path "**/.venv/**") | tee /tmp/pylint.txt
+    - sed -n 's/^Your code has been rated at \([-0-9.]*\)\/.*/\1/p' /tmp/pylint.txt > public/badges/$CI_JOB_NAME.score
+    - pylint --exit-zero --output-format=pylint_gitlab.GitlabCodeClimateReporter $(find -type f -name "*.py" ! -path "**/.venv/**") > codeclimate.json
+    - pylint --exit-zero --output-format=pylint_gitlab.GitlabPagesHtmlReporter $(find -type f -name "*.py" ! -path "**/.venv/**") > public/lint/index.html
+  after_script:
+    - anybadge --overwrite --label $CI_JOB_NAME --value=$(cat public/badges/$CI_JOB_NAME.score) --file=public/badges/$CI_JOB_NAME.svg 4=red 6=orange 8=yellow 10=green
+    - |
+      echo "Your score is: $(cat public/badges/$CI_JOB_NAME.score)"
+  artifacts:
+    paths:
+      - public
+    reports:
+      codequality: codeclimate.json
+    when: always
+
+# This job also run in the deploy stage
+pages:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - echo
+  artifacts:
+    paths:
+      - public
+  only:
+    refs:
+      - main
+
+integration_test:
+  stage: test
+  image: nunomcmm/docker_lb
+  script:
+    - OUTPUTDIR='outputs' INPUT='tests/RAG_small.fasta' snakemake --cores all
